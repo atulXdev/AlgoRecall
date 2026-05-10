@@ -22,7 +22,7 @@ import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -40,6 +40,154 @@ interface UserProfile {
   level: number;
 }
 
+interface Problem {
+  id: string;
+  title: string;
+  topic: string;
+  difficulty: string;
+}
+
+// ── Command Palette ────────────────────────────────────────────────────────────
+function SearchPalette({ onClose }: { onClose: () => void }) {
+  const [query, setQuery] = useState("");
+  const [problems, setProblems] = useState<Problem[]>([]);
+  const [filtered, setFiltered] = useState<Problem[]>([]);
+  const [activeIdx, setActiveIdx] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const router = useRouter();
+
+  // Load problems once
+  useEffect(() => {
+    (async () => {
+      const supabase = createClient();
+      const { data } = await supabase
+        .from("problems")
+        .select("id, title, topic, difficulty")
+        .eq("is_deleted", false)
+        .order("title");
+      setProblems(data ?? []);
+      setFiltered(data ?? []);
+    })();
+    inputRef.current?.focus();
+  }, []);
+
+  // Filter on query change
+  useEffect(() => {
+    const q = query.toLowerCase();
+    setFiltered(
+      q
+        ? problems.filter(
+            (p) =>
+              p.title.toLowerCase().includes(q) ||
+              p.topic?.toLowerCase().includes(q) ||
+              p.difficulty?.toLowerCase().includes(q)
+          )
+        : problems
+    );
+    setActiveIdx(0);
+  }, [query, problems]);
+
+  // Keyboard navigation
+  const handleKey = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setActiveIdx((i) => Math.min(i + 1, filtered.length - 1));
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setActiveIdx((i) => Math.max(i - 1, 0));
+      } else if (e.key === "Enter") {
+        if (filtered[activeIdx]) {
+          router.push(`/problems/${filtered[activeIdx].id}`);
+          onClose();
+        }
+      } else if (e.key === "Escape") {
+        onClose();
+      }
+    },
+    [filtered, activeIdx, router, onClose]
+  );
+
+  const diffColor: Record<string, string> = {
+    Easy: "text-emerald-400",
+    Medium: "text-amber-400",
+    Hard: "text-red-400",
+  };
+
+  return (
+    /* Backdrop */
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center pt-20 px-4"
+      style={{ background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)" }}
+      onMouseDown={(e) => e.target === e.currentTarget && onClose()}
+    >
+      <div
+        className="w-full max-w-xl rounded-xl border border-border bg-card shadow-2xl overflow-hidden"
+        style={{ maxHeight: "70vh" }}
+      >
+        {/* Search input row */}
+        <div className="flex items-center gap-3 px-4 border-b border-border">
+          <Search className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+          <input
+            ref={inputRef}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={handleKey}
+            placeholder="Search problems..."
+            className="flex-1 bg-transparent py-4 text-sm text-foreground placeholder:text-muted-foreground outline-none"
+          />
+          <button
+            onClick={onClose}
+            className="text-xs text-muted-foreground border border-border rounded px-1.5 py-0.5 hover:bg-accent"
+          >
+            ESC
+          </button>
+        </div>
+
+        {/* Results */}
+        <div className="overflow-y-auto" style={{ maxHeight: "calc(70vh - 57px)" }}>
+          {filtered.length === 0 ? (
+            <p className="py-10 text-center text-sm text-muted-foreground">
+              No problems found
+            </p>
+          ) : (
+            filtered.slice(0, 50).map((p, i) => (
+              <button
+                key={p.id}
+                className={cn(
+                  "w-full flex items-center justify-between px-4 py-3 text-left text-sm transition-colors",
+                  i === activeIdx ? "bg-primary/10 text-primary" : "hover:bg-accent"
+                )}
+                onMouseEnter={() => setActiveIdx(i)}
+                onClick={() => {
+                  router.push(`/problems/${p.id}`);
+                  onClose();
+                }}
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <BookOpen className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                  <span className="truncate font-medium">{p.title}</span>
+                  {p.topic && (
+                    <span className="text-xs text-muted-foreground hidden sm:inline">
+                      {p.topic}
+                    </span>
+                  )}
+                </div>
+                {p.difficulty && (
+                  <span className={cn("text-xs font-semibold flex-shrink-0 ml-2", diffColor[p.difficulty])}>
+                    {p.difficulty}
+                  </span>
+                )}
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Dashboard Layout ───────────────────────────────────────────────────────────
 export default function DashboardLayout({
   children,
 }: {
@@ -50,6 +198,7 @@ export default function DashboardLayout({
   const [user, setUser] = useState<UserProfile | null>(null);
   const [streak, setStreak] = useState(0);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
 
   useEffect(() => {
     async function loadUser() {
@@ -76,6 +225,18 @@ export default function DashboardLayout({
       if (streakData) setStreak(streakData.current_revision_streak);
     }
     loadUser();
+  }, []);
+
+  // Global ⌘K / Ctrl+K shortcut
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        setSearchOpen(true);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
   }, []);
 
   const handleLogout = async () => {
@@ -151,6 +312,9 @@ export default function DashboardLayout({
 
   return (
     <div className="flex h-screen bg-background">
+      {/* Search palette */}
+      {searchOpen && <SearchPalette onClose={() => setSearchOpen(false)} />}
+
       {/* Desktop Sidebar */}
       <aside className="hidden w-64 flex-shrink-0 border-r border-border bg-sidebar md:block">
         <SidebarContent />
@@ -174,14 +338,17 @@ export default function DashboardLayout({
             </SheetContent>
           </Sheet>
 
-          {/* Search placeholder */}
-          <div className="hidden md:flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-1.5 text-sm text-muted-foreground cursor-pointer hover:bg-muted/50 transition-colors">
+          {/* Search bar — now clickable */}
+          <button
+            onClick={() => setSearchOpen(true)}
+            className="hidden md:flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-1.5 text-sm text-muted-foreground cursor-pointer hover:bg-muted/50 transition-colors"
+          >
             <Search className="h-4 w-4" />
             <span>Search problems...</span>
             <kbd className="ml-8 rounded border border-border bg-background px-1.5 py-0.5 text-xs">
               ⌘K
             </kbd>
-          </div>
+          </button>
 
           <div className="md:hidden" />
 

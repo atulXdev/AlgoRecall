@@ -213,15 +213,26 @@ export async function syncRepository(
       }
     }
 
-    // Get existing problems
+    // Get ALL problems for this user (including soft-deleted) so we can
+    // match on github_path and restore/update rather than insert duplicates.
     const { data: existingProblems } = await supabase
       .from("problems")
-      .select("id, github_path, github_sha")
-      .eq("user_id", userId)
-      .eq("is_deleted", false);
+      .select("id, github_path, github_sha, is_deleted, platform_id")
+      .eq("user_id", userId);
 
+    // Primary lookup: exact github_path (folder name)
     const existingByPath = new Map(
       (existingProblems || []).map((p) => [p.github_path, p])
+    );
+    // Secondary lookup: case-insensitive folder path (handles casing changes by extension)
+    const existingByPathLower = new Map(
+      (existingProblems || []).map((p) => [p.github_path.toLowerCase(), p])
+    );
+    // Tertiary lookup: by LeetCode problem ID (handles completely renamed folders for same problem)
+    const existingByLcId = new Map(
+      (existingProblems || [])
+        .filter((p) => p.platform_id)
+        .map((p) => [p.platform_id, p])
     );
 
     result.totalFiles = folderMap.size;
@@ -249,9 +260,24 @@ export async function syncRepository(
           f.path.toLowerCase().includes(folder.toLowerCase())
         ) || entry.codeFiles[0];
 
-        // Check if SHA changed
-        const existing = existingByPath.get(folder);
+        // Resolve existing record using 3-level fallback to prevent duplicates:
+        // 1. Exact folder name match (most common case)
+        // 2. Case-insensitive folder name match (extension sometimes changes casing)
+        // 3. Same LeetCode problem ID in a differently-named folder
+        const existing =
+          existingByPath.get(folder) ??
+          existingByPathLower.get(folder.toLowerCase()) ??
+          (lcId ? existingByLcId.get(String(lcId)) : undefined);
+
+        // Skip if the code file SHA hasn't changed (nothing new to sync)
         if (existing && existing.github_sha === primaryCode.sha) {
+          // But if it was soft-deleted, restore it without re-fetching content
+          if (existing.is_deleted) {
+            await supabase
+              .from("problems")
+              .update({ is_deleted: false, github_path: folder, updated_at: new Date().toISOString() })
+              .eq("id", existing.id);
+          }
           result.skipped++;
           continue;
         }
@@ -297,11 +323,36 @@ export async function syncRepository(
         };
 
         if (existing) {
+          // Update existing problem (and restore if it was soft-deleted)
           await supabase
             .from("problems")
             .update({ ...problemData, updated_at: new Date().toISOString() })
             .eq("id", existing.id);
-          result.updatedProblems++;
+
+          // If the problem was soft-deleted, ensure a revision schedule exists
+          if (existing.is_deleted) {
+            const { data: existingSchedule } = await supabase
+              .from("revision_schedules")
+              .select("id")
+              .eq("problem_id", existing.id)
+              .maybeSingle();
+
+            if (!existingSchedule) {
+              const today = new Date().toISOString().split("T")[0];
+              await supabase.from("revision_schedules").insert({
+                user_id: userId,
+                problem_id: existing.id,
+                next_revision_date: today,
+                ease_factor: getInitialEaseFactor(difficulty),
+                current_interval: 0,
+                revision_count: 0,
+                confidence_level: 3,
+              });
+            }
+            result.newProblems++; // treat restored problems as "new" in the count
+          } else {
+            result.updatedProblems++;
+          }
         } else {
           const { data: newProblem, error: insertError } = await supabase
             .from("problems")
