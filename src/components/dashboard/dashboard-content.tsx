@@ -269,6 +269,15 @@ export default function DashboardContent({ profile, focusQueue, backlogSize, dor
 
 function ProblemRow({ item }: { item: any }) {
   const problem = item.problems;
+  const healthStatus = item.health_status || "relearning";
+  const healthColor: Record<string, string> = {
+    strong: "text-emerald-500",
+    mastered: "text-blue-500",
+    fragile: "text-amber-500",
+    forgotten: "text-red-500",
+    relearning: "text-muted-foreground",
+  };
+  
   // Determine if it was from backlog implicitly, but don't show red danger text
   const isBacklog = new Date(item.next_revision_date).getTime() < new Date(new Date().toISOString().split("T")[0]).getTime();
 
@@ -286,10 +295,14 @@ function ProblemRow({ item }: { item: any }) {
                 </Badge>
               )}
               {isBacklog && <span className="text-[10px] text-amber-400">Backlog</span>}
+              <span className={`text-[10px] font-medium capitalize ${healthColor[healthStatus]}`}>
+                {healthStatus}
+              </span>
             </div>
           </div>
         </div>
         <div className="flex items-center gap-3 flex-shrink-0">
+          <div className="text-xs text-muted-foreground">STR: {Math.round(item.memory_strength || 0)}</div>
           <ConfidenceDots level={problem.confidence_level} />
           <ArrowRight className="h-4 w-4 text-muted-foreground group-hover:text-primary transition-colors" />
         </div>

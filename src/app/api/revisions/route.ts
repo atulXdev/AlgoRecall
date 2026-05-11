@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
-import { calculateNextInterval, type Rating } from "@/lib/spaced-repetition/engine";
+import { calculateNextInterval } from "@/lib/spaced-repetition/engine";
 import { XP_AWARDS } from "@/lib/spaced-repetition/constants";
 
 export async function POST(request: Request) {
@@ -9,9 +9,11 @@ export async function POST(request: Request) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await request.json();
-  const { problem_id, rating, time_taken_seconds, reveals_used, notes, mode = 'full' } = body;
+  const { problem_id, rating, confidence, time_taken_seconds, reveals_used, notes, mode = 'full' } = body;
 
-  if (!problem_id || !rating) return NextResponse.json({ error: "Missing fields" }, { status: 400 });
+  const actualConfidence = confidence || (rating === 'easy' ? 'perfect' : rating === 'medium' ? 'partial' : rating === 'hard' ? 'hint' : 'forgot');
+
+  if (!problem_id || !actualConfidence) return NextResponse.json({ error: "Missing fields" }, { status: 400 });
 
   // Get current schedule
   const { data: schedule } = await supabase.from("revision_schedules").select("*").eq("problem_id", problem_id).eq("user_id", user.id).single();
@@ -20,11 +22,11 @@ export async function POST(request: Request) {
 
   // Calculate next interval
   const result = calculateNextInterval({
-    rating: rating as Rating,
+    mode: mode as any,
+    confidence: actualConfidence as any,
     currentInterval: schedule.current_interval,
-    easeFactor: parseFloat(schedule.ease_factor),
+    memoryStrength: schedule.memory_strength || 0,
     revisionNumber: schedule.revision_count,
-    confidenceLevel: schedule.confidence_level,
   });
 
   const nextDate = result.nextRevisionDate.toISOString().split("T")[0];
@@ -34,25 +36,29 @@ export async function POST(request: Request) {
     revision_count: schedule.revision_count + 1,
     next_revision_date: nextDate,
     last_revised_at: new Date().toISOString(),
-    ease_factor: result.newEaseFactor,
+    memory_strength: result.newMemoryStrength,
+    health_status: result.newHealthStatus,
     current_interval: result.newInterval,
-    confidence_level: result.newConfidenceLevel,
+    confidence_level: result.newHealthStatus === "mastered" ? 5 : result.newHealthStatus === "strong" ? 4 : 3,
   }).eq("id", schedule.id);
 
   // Update problem confidence
-  await supabase.from("problems").update({ confidence_level: result.newConfidenceLevel }).eq("id", problem_id);
+  await supabase.from("problems").update({ confidence_level: result.newHealthStatus === "mastered" ? 5 : 3 }).eq("id", problem_id);
 
   // Insert revision log
   await supabase.from("revision_logs").insert({
     user_id: user.id,
     problem_id,
-    rating,
+    rating: rating || "medium",
+    confidence_rating: actualConfidence,
     time_taken_seconds,
     revision_number: schedule.revision_count + 1,
     interval_before: schedule.current_interval,
     interval_after: result.newInterval,
-    ease_before: parseFloat(schedule.ease_factor),
-    ease_after: result.newEaseFactor,
+    memory_strength_before: schedule.memory_strength || 0,
+    memory_strength_after: result.newMemoryStrength,
+    health_before: schedule.health_status,
+    health_after: result.newHealthStatus,
     reveals_used,
     notes,
     mode,
@@ -102,6 +108,7 @@ export async function POST(request: Request) {
     interval_days: result.newInterval,
     xp_awarded: xpAmount,
     streak_updated: true,
-    new_confidence: result.newConfidenceLevel,
+    new_memory_strength: result.newMemoryStrength,
+    new_health_status: result.newHealthStatus,
   });
 }

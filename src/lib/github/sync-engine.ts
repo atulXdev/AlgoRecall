@@ -478,25 +478,23 @@ async function markAsRevisedToday(
   existingSchedule?: any
 ) {
   let currentInterval = 0;
-  let easeFactor = getInitialEaseFactor(difficulty);
+  let memoryStrength = 0;
   let revisionCount = 0;
-  let confidenceLevel = 3;
   let scheduleId = null;
 
   if (existingSchedule) {
     currentInterval = existingSchedule.current_interval || 0;
-    easeFactor = parseFloat(existingSchedule.ease_factor) || easeFactor;
+    memoryStrength = existingSchedule.memory_strength || 0;
     revisionCount = existingSchedule.revision_count || 0;
-    confidenceLevel = existingSchedule.confidence_level || 3;
     scheduleId = existingSchedule.id;
   }
 
   const result = calculateNextInterval({
-    rating: "easy",
+    mode: "full",
+    confidence: "perfect", // Synced problems assume a perfect full solve
     currentInterval,
-    easeFactor,
+    memoryStrength,
     revisionNumber: revisionCount,
-    confidenceLevel,
   });
 
   const nextDate = result.nextRevisionDate.toISOString().split("T")[0];
@@ -506,10 +504,11 @@ async function markAsRevisedToday(
     user_id: userId,
     problem_id: problemId,
     next_revision_date: nextDate,
-    ease_factor: result.newEaseFactor,
+    memory_strength: result.newMemoryStrength,
+    health_status: result.newHealthStatus,
     current_interval: result.newInterval,
     revision_count: revisionCount + 1,
-    confidence_level: result.newConfidenceLevel,
+    confidence_level: result.newHealthStatus === "mastered" ? 5 : 3,
     last_revised_at: new Date().toISOString()
   };
 
@@ -519,20 +518,24 @@ async function markAsRevisedToday(
     await supabase.from("revision_schedules").insert(scheduleData);
   }
 
-  await supabase.from("problems").update({ confidence_level: result.newConfidenceLevel }).eq("id", problemId);
+  await supabase.from("problems").update({ confidence_level: result.newHealthStatus === "mastered" ? 5 : 3 }).eq("id", problemId);
 
   await supabase.from("revision_logs").insert({
     user_id: userId,
     problem_id: problemId,
     rating: "easy",
+    confidence_rating: "perfect",
     time_taken_seconds: 0,
     revision_number: revisionCount + 1,
     interval_before: currentInterval,
     interval_after: result.newInterval,
-    ease_before: easeFactor,
-    ease_after: result.newEaseFactor,
+    memory_strength_before: memoryStrength,
+    memory_strength_after: result.newMemoryStrength,
+    health_before: existingSchedule?.health_status || "relearning",
+    health_after: result.newHealthStatus,
     reveals_used: 0,
     notes: "Solved on LeetCode (Synced)",
+    mode: "full"
   });
   
   try {

@@ -25,6 +25,7 @@ const difficultyColor: Record<string, string> = {
 export default function ProblemDetailContent({ problem, schedule, revisionHistory }: { problem: any; schedule: any; revisionHistory: any[] }) {
   const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
+  const [selectedMode, setSelectedMode] = useState<'quick' | 'full'>('full');
 
   const [notes, setNotes] = useState(problem.user_notes_json?.text || "");
   const [savingNotes, setSavingNotes] = useState(false);
@@ -44,23 +45,23 @@ export default function ProblemDetailContent({ problem, schedule, revisionHistor
     }
   };
 
-  const handleRevise = useCallback(async (mode: 'quick' | 'full') => {
+  const handleRevise = useCallback(async (confidence: string) => {
     setSubmitting(true);
     try {
       const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      // Always send "medium" to advance exactly 1 step in the spaced repetition sequence (1, 3, 7, 15, 30, 60)
       const res = await fetch("/api/revisions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           problem_id: problem.id,
-          rating: mode === "quick" ? "easy" : "medium", // Quick recalls act as easy reinforcement
-          time_taken_seconds: mode === "quick" ? 120 : 600,
-          reveals_used: { code: false, hint: false, intuition: false },
-          mode,
+          rating: "medium", // Fallback for old API if needed
+          confidence,
+          time_taken_seconds: selectedMode === "quick" ? 120 : 600,
+          reveals_used: { code: false, hint: confidence === "hint", intuition: false },
+          mode: selectedMode,
         }),
       });
 
@@ -77,7 +78,7 @@ export default function ProblemDetailContent({ problem, schedule, revisionHistor
     } finally {
       setSubmitting(false);
     }
-  }, [problem.id, router]);
+  }, [problem.id, router, selectedMode]);
 
   const lastRevisedDate = revisionHistory.length > 0 
     ? new Date(revisionHistory[0].created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
@@ -122,17 +123,39 @@ export default function ProblemDetailContent({ problem, schedule, revisionHistor
           </div>
         </div>
 
-        <div className="flex flex-col items-end gap-3">
-          <div className="flex gap-2">
-            <Button onClick={() => handleRevise('quick')} disabled={submitting} variant="outline" size="sm" className="gap-2 shadow-sm font-medium border-primary/50 text-primary hover:bg-primary/10">
-              <Eye className="h-4 w-4" />
-              Quick Recall
+        <div className="flex flex-col items-end gap-3 max-w-sm w-full">
+          {/* Mode Switcher */}
+          <div className="flex w-full bg-secondary/50 rounded-lg p-1 border border-border/50">
+            <button
+              onClick={() => setSelectedMode('quick')}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-md transition-colors ${selectedMode === 'quick' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+            >
+              <Eye className="h-3.5 w-3.5" /> Quick Recall
+            </button>
+            <button
+              onClick={() => setSelectedMode('full')}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-md transition-colors ${selectedMode === 'full' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+            >
+              <CheckCircle2 className="h-3.5 w-3.5" /> Full Solve
+            </button>
+          </div>
+
+          {/* Confidence Buttons */}
+          <div className="grid grid-cols-2 gap-2 w-full">
+            <Button onClick={() => handleRevise('forgot')} disabled={submitting} variant="outline" size="sm" className="border-red-500/20 text-red-500 hover:bg-red-500/10">
+              Forgot
             </Button>
-            <Button onClick={() => handleRevise('full')} disabled={submitting} size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2 shadow-sm font-medium">
-              <CheckCircle2 className="h-4 w-4" />
-              Full Solve
+            <Button onClick={() => handleRevise('hint')} disabled={submitting} variant="outline" size="sm" className="border-amber-500/20 text-amber-500 hover:bg-amber-500/10">
+              Needed Hint
+            </Button>
+            <Button onClick={() => handleRevise('partial')} disabled={submitting} variant="outline" size="sm" className="border-blue-500/20 text-blue-500 hover:bg-blue-500/10">
+              Partial Recall
+            </Button>
+            <Button onClick={() => handleRevise('perfect')} disabled={submitting} variant="outline" size="sm" className="border-emerald-500/20 text-emerald-500 hover:bg-emerald-500/10">
+              Perfect
             </Button>
           </div>
+          
           <Button onClick={saveNotes} disabled={savingNotes || !notesRevealed} variant="secondary" size="sm" className="w-full">
             {savingNotes ? "Saving..." : "Save Notes"}
           </Button>
