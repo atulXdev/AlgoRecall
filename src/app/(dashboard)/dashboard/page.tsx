@@ -9,19 +9,32 @@ export default async function DashboardPage() {
 
   const today = new Date().toISOString().split("T")[0];
 
-  const [profileRes, dueRes, streakRes, topicRes, activityRes, heatmapRes, countRes, revisedRes] = await Promise.all([
+  const [profileRes, dueRes, streakRes, topicRes, activityRes, heatmapRes, countRes, revisedRes, dormantRes] = await Promise.all([
     supabase.from("users").select("*").eq("id", user.id).single(),
-    supabase.from("revision_schedules").select("*, problems!inner(id, title, topic, difficulty, platform, tags, confidence_level, date_solved, url, is_deleted, created_at)").eq("user_id", user.id).eq("problems.is_deleted", false).lte("next_revision_date", today).order("next_revision_date", { ascending: true }),
+    supabase.from("revision_schedules").select("*, problems!inner(id, title, topic, difficulty, platform, tags, confidence_level, date_solved, url, is_deleted, created_at, state)").eq("user_id", user.id).eq("problems.is_deleted", false).in("problems.state", ["active", "learning"]).lte("next_revision_date", today).order("next_revision_date", { ascending: true }),
     supabase.from("streaks").select("*").eq("user_id", user.id).single(),
     supabase.from("topic_stats").select("*").eq("user_id", user.id).order("mastery_score", { ascending: true }).limit(5),
     supabase.from("daily_activity").select("*").eq("user_id", user.id).eq("activity_date", today).single(),
     supabase.from("daily_activity").select("activity_date, revision_count, new_problems").eq("user_id", user.id).gte("activity_date", new Date(Date.now() - 365 * 86400000).toISOString().split("T")[0]).order("activity_date", { ascending: true }),
     supabase.from("problems").select("*", { count: "exact", head: true }).eq("user_id", user.id).eq("is_deleted", false),
     supabase.from("revision_logs").select("*, problems!inner(id, title, topic, difficulty, platform, confidence_level)").eq("user_id", user.id).gte("created_at", today).order("created_at", { ascending: false }),
+    // Also fetch dormant problems for backlog activation info
+    supabase.from("problems").select("id", { count: "exact", head: true }).eq("user_id", user.id).eq("state", "dormant").eq("is_deleted", false),
   ]);
 
-  // Sort by next_revision_date (done by DB), then by problems.created_at descending for items with the same revision date
+  // Sort by next_revision_date (done by DB), then by current focus topic, then by problems.created_at descending for items with the same revision date
+  const currentFocus = profileRes.data?.current_focus_topic;
+
   const sortedRevisions = (dueRes.data || []).sort((a, b) => {
+    // 1. Topic Focus Priority
+    if (currentFocus) {
+      const aIsFocus = a.problems?.topic?.toLowerCase() === currentFocus.toLowerCase();
+      const bIsFocus = b.problems?.topic?.toLowerCase() === currentFocus.toLowerCase();
+      if (aIsFocus && !bIsFocus) return -1;
+      if (!aIsFocus && bIsFocus) return 1;
+    }
+
+    // 2. Date comparison
     if (a.next_revision_date === b.next_revision_date) {
       // @ts-ignore
       return new Date(b.problems?.created_at || 0).getTime() - new Date(a.problems?.created_at || 0).getTime();
@@ -29,14 +42,29 @@ export default async function DashboardPage() {
     return 0; // DB already sorted by next_revision_date ascending
   });
 
-  const overdue = sortedRevisions.filter((r) => r.next_revision_date < today);
+  // Limit the focus queue based on user settings (default to 10)
+  const dailyRevisionLimit = profileRes.data?.daily_revision_limit || 10;
+  
+  // Create a priority-based selection for today's queue
+  // Priority logic: 1. Due Today, 2. Overdue (Recent), 3. Overdue (Oldest)
   const dueToday = sortedRevisions.filter((r) => r.next_revision_date === today);
+  const overdue = sortedRevisions.filter((r) => r.next_revision_date < today);
+  
+  // Combine and limit the queue to avoid cognitive overload
+  const combinedQueue = [...dueToday, ...overdue].slice(0, dailyRevisionLimit);
+  
+  // The rest are put into a "Backlog Pool"
+  const backlogPoolSize = Math.max(0, sortedRevisions.length - dailyRevisionLimit);
+  
+  // Dormant count
+  const dormantCount = dormantRes.count || 0;
 
   return (
     <DashboardContent
       profile={profileRes.data}
-      overdue={overdue}
-      dueToday={dueToday}
+      focusQueue={combinedQueue}
+      backlogSize={backlogPoolSize}
+      dormantCount={dormantCount}
       revisedToday={revisedRes.data || []}
       streak={streakRes.data}
       topicStats={topicRes.data || []}

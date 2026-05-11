@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { ArrowLeft, Clock, Eye, ExternalLink, BookOpen } from "lucide-react";
+import { ArrowLeft, Clock, Eye, ExternalLink, BookOpen, CheckCircle2 } from "lucide-react";
 import { GithubIcon as Github } from "@/components/icons/github";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -44,7 +44,7 @@ export default function ProblemDetailContent({ problem, schedule, revisionHistor
     }
   };
 
-  const handleRevise = useCallback(async () => {
+  const handleRevise = useCallback(async (mode: 'quick' | 'full') => {
     setSubmitting(true);
     try {
       const supabase = createClient();
@@ -57,9 +57,10 @@ export default function ProblemDetailContent({ problem, schedule, revisionHistor
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           problem_id: problem.id,
-          rating: "medium", 
-          time_taken_seconds: 0,
+          rating: mode === "quick" ? "easy" : "medium", // Quick recalls act as easy reinforcement
+          time_taken_seconds: mode === "quick" ? 120 : 600,
           reveals_used: { code: false, hint: false, intuition: false },
+          mode,
         }),
       });
 
@@ -122,10 +123,16 @@ export default function ProblemDetailContent({ problem, schedule, revisionHistor
         </div>
 
         <div className="flex flex-col items-end gap-3">
-          <Button onClick={handleRevise} disabled={submitting} size="lg" className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2 shadow-sm font-medium">
-            <Eye className="h-4 w-4" />
-            {submitting ? "Saving..." : "Mark as Revised"}
-          </Button>
+          <div className="flex gap-2">
+            <Button onClick={() => handleRevise('quick')} disabled={submitting} variant="outline" size="sm" className="gap-2 shadow-sm font-medium border-primary/50 text-primary hover:bg-primary/10">
+              <Eye className="h-4 w-4" />
+              Quick Recall
+            </Button>
+            <Button onClick={() => handleRevise('full')} disabled={submitting} size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2 shadow-sm font-medium">
+              <CheckCircle2 className="h-4 w-4" />
+              Full Solve
+            </Button>
+          </div>
           <Button onClick={saveNotes} disabled={savingNotes || !notesRevealed} variant="secondary" size="sm" className="w-full">
             {savingNotes ? "Saving..." : "Save Notes"}
           </Button>

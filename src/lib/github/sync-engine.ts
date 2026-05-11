@@ -177,6 +177,9 @@ export async function syncRepository(
   };
 
   try {
+    const { data: user } = await supabase.from("users").select("last_synced_at").eq("id", userId).single();
+    const isFirstSync = !user?.last_synced_at;
+
     const { items, branch } = await fetchRepoTree(owner, repo, token);
 
     // Group files by folder: "875-KokoEatingBananas" → { code: [...], readme: ... }
@@ -305,22 +308,23 @@ export async function syncRepository(
 
         const url = lcId ? generateLeetCodeUrl(folder) : null;
 
-        const problemData = {
-          user_id: userId,
-          title,
-          topic,
-          difficulty,
-          platform: lcId ? "LeetCode" : null,
-          platform_id: lcId ? String(lcId) : null,
-          url,
-          github_path: folder,
-          github_sha: primaryCode.sha,
-          github_url: `https://github.com/${owner}/${repo}/tree/${branch}/${encodeURIComponent(folder)}`,
-          intuition_md: intuitionMd,
-          tags: [topic.toLowerCase()],
-          confidence_level: 3,
-          is_deleted: false,
-        };
+          const problemData = {
+            user_id: userId,
+            title,
+            topic,
+            difficulty,
+            platform: lcId ? "LeetCode" : null,
+            platform_id: lcId ? String(lcId) : null,
+            url,
+            github_path: folder,
+            github_sha: primaryCode.sha,
+            github_url: `https://github.com/${owner}/${repo}/tree/${branch}/${encodeURIComponent(folder)}`,
+            intuition_md: intuitionMd,
+            tags: [topic.toLowerCase()],
+            confidence_level: 3,
+            is_deleted: false,
+            state: isFirstSync ? "dormant" : "active",
+          };
 
         if (existing) {
           // Update existing problem (and restore if it was soft-deleted)
@@ -363,7 +367,21 @@ export async function syncRepository(
 
           // Create revision schedule
           if (newProblem) {
-            await markAsRevisedToday(supabase, userId, newProblem.id, difficulty);
+            if (isFirstSync) {
+              // For first sync, just insert a dormant schedule (far future or just default, but dashboard will filter it)
+              const today = new Date().toISOString().split("T")[0];
+              await supabase.from("revision_schedules").insert({
+                user_id: userId,
+                problem_id: newProblem.id,
+                next_revision_date: today,
+                ease_factor: getInitialEaseFactor(difficulty),
+                current_interval: 0,
+                revision_count: 0,
+                confidence_level: 3,
+              });
+            } else {
+              await markAsRevisedToday(supabase, userId, newProblem.id, difficulty);
+            }
           }
           result.newProblems++;
         }

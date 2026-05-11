@@ -27,8 +27,9 @@ import HeatmapGrid from "./heatmap-grid";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 interface DashboardContentProps {
   profile: any;
-  overdue: any[];
-  dueToday: any[];
+  focusQueue: any[];
+  backlogSize: number;
+  dormantCount: number;
   revisedToday: any[];
   streak: any;
   topicStats: any[];
@@ -53,11 +54,11 @@ function ConfidenceDots({ level }: { level: number }) {
   );
 }
 
-export default function DashboardContent({ profile, overdue, dueToday, revisedToday, streak, topicStats, todayActivity, heatmapData, totalProblems }: DashboardContentProps) {
+export default function DashboardContent({ profile, focusQueue, backlogSize, dormantCount, revisedToday, streak, topicStats, todayActivity, heatmapData, totalProblems }: DashboardContentProps) {
   const router = useRouter();
   const [syncing, setSyncing] = useState(false);
   const completedToday = todayActivity?.revision_count || 0;
-  const totalDue = overdue.length + dueToday.length;
+  const totalDue = focusQueue.length;
   const greeting = new Date().getHours() < 12 ? "Good morning" : new Date().getHours() < 17 ? "Good afternoon" : "Good evening";
 
   const handleSync = async () => {
@@ -100,8 +101,8 @@ export default function DashboardContent({ profile, overdue, dueToday, revisedTo
       {/* Stat Cards */}
       <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
         {[
-          { label: "Due Today", value: dueToday.length, icon: Calendar, color: "text-primary" },
-          { label: "Overdue", value: overdue.length, icon: AlertTriangle, color: overdue.length > 0 ? "text-red-400" : "text-muted-foreground" },
+          { label: "Focus Queue", value: focusQueue.length, icon: Calendar, color: "text-primary" },
+          { label: "Backlog", value: backlogSize, icon: BookOpen, color: backlogSize > 0 ? "text-amber-400" : "text-muted-foreground" },
           { label: "Completed Today", value: completedToday, icon: CheckCircle2, color: completedToday >= 10 ? "text-emerald-400" : "text-amber-400", isGoal: true },
           { label: "Total Problems", value: totalProblems, icon: BookOpen, color: "text-chart-3" },
         ].map((stat, i) => (
@@ -130,38 +131,44 @@ export default function DashboardContent({ profile, overdue, dueToday, revisedTo
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Revision List - 2 cols */}
         <div className="lg:col-span-2 space-y-4">
-          {/* Overdue Section */}
-          {overdue.length > 0 && (
-            <Card className="border-red-500/20 bg-red-500/5">
-              <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2 text-red-400 text-base">
-                  <AlertTriangle className="h-4 w-4" />
-                  Overdue — {overdue.length} problem{overdue.length > 1 ? "s" : ""}
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2">
-                {overdue.map((item) => (
-                  <ProblemRow key={item.id} item={item} isOverdue />
-                ))}
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Due Today Section */}
-          {dueToday.length > 0 && (
+          {/* Focus Queue Section */}
+          {focusQueue.length > 0 && (
             <Card className="border-border/50">
               <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-base">
                   <Calendar className="h-4 w-4 text-primary" />
-                  Due Today — {dueToday.length} problem{dueToday.length > 1 ? "s" : ""}
+                  Today&apos;s Focus Queue — {focusQueue.length} problem{focusQueue.length > 1 ? "s" : ""}
                 </CardTitle>
+                <p className="text-sm text-muted-foreground">Your recommended revisions for today. Take it easy and focus on mastering these.</p>
               </CardHeader>
               <CardContent className="space-y-2">
-                {dueToday.map((item) => (
+                {focusQueue.map((item) => (
                   <ProblemRow key={item.id} item={item} />
                 ))}
               </CardContent>
             </Card>
+          )}
+          
+          {/* Backlog Alert (soft) */}
+          {backlogSize > 0 && (
+            <div className="rounded-lg bg-amber-500/5 border border-amber-500/20 p-4 flex items-center justify-between text-sm">
+              <div className="flex items-center gap-3">
+                <BookOpen className="h-5 w-5 text-amber-400" />
+                <span className="text-amber-400 font-medium">You have {backlogSize} problem{backlogSize > 1 ? "s" : ""} waiting in your backlog.</span>
+              </div>
+              <span className="text-muted-foreground text-xs">These will gradually appear in your Focus Queue over the coming days.</span>
+            </div>
+          )}
+
+          {/* Dormant Alert (soft) */}
+          {dormantCount > 0 && (
+            <div className="rounded-lg bg-secondary/50 border border-border/50 p-4 flex items-center justify-between text-sm">
+              <div className="flex items-center gap-3">
+                <CheckCircle2 className="h-5 w-5 text-muted-foreground" />
+                <span className="text-muted-foreground font-medium">{dormantCount} historical problem{dormantCount > 1 ? "s" : ""} imported.</span>
+              </div>
+              <span className="text-muted-foreground text-xs text-right max-w-xs">We&apos;ll smartly queue these up over time so you don&apos;t get overwhelmed.</span>
+            </div>
           )}
 
           {/* Revised Today Section */}
@@ -260,9 +267,10 @@ export default function DashboardContent({ profile, overdue, dueToday, revisedTo
   );
 }
 
-function ProblemRow({ item, isOverdue }: { item: any; isOverdue?: boolean }) {
+function ProblemRow({ item }: { item: any }) {
   const problem = item.problems;
-  const daysLate = isOverdue ? Math.floor((Date.now() - new Date(item.next_revision_date).getTime()) / 86400000) : 0;
+  // Determine if it was from backlog implicitly, but don't show red danger text
+  const isBacklog = new Date(item.next_revision_date).getTime() < new Date(new Date().toISOString().split("T")[0]).getTime();
 
   return (
     <Link href={`/problems/${problem.id}?mode=blind`} className="block">
@@ -277,7 +285,7 @@ function ProblemRow({ item, isOverdue }: { item: any; isOverdue?: boolean }) {
                   {problem.difficulty}
                 </Badge>
               )}
-              {isOverdue && <span className="text-[10px] text-red-400">{daysLate}d late</span>}
+              {isBacklog && <span className="text-[10px] text-amber-400">Backlog</span>}
             </div>
           </div>
         </div>

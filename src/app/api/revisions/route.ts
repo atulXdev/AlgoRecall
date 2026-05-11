@@ -9,7 +9,7 @@ export async function POST(request: Request) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await request.json();
-  const { problem_id, rating, time_taken_seconds, reveals_used, notes } = body;
+  const { problem_id, rating, time_taken_seconds, reveals_used, notes, mode = 'full' } = body;
 
   if (!problem_id || !rating) return NextResponse.json({ error: "Missing fields" }, { status: 400 });
 
@@ -55,6 +55,7 @@ export async function POST(request: Request) {
     ease_after: result.newEaseFactor,
     reveals_used,
     notes,
+    mode,
   });
 
   // Award XP
