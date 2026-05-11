@@ -16,7 +16,7 @@ export async function POST(request: Request) {
   if (!problem_id || !actualConfidence) return NextResponse.json({ error: "Missing fields" }, { status: 400 });
 
   // Get current schedule
-  const { data: schedule } = await supabase.from("revision_schedules").select("*").eq("problem_id", problem_id).eq("user_id", user.id).single();
+  const { data: schedule } = await supabase.from("revision_schedules").select("*, problems(cognitive_complexity)").eq("problem_id", problem_id).eq("user_id", user.id).single();
 
   if (!schedule) return NextResponse.json({ error: "Schedule not found" }, { status: 404 });
 
@@ -27,6 +27,9 @@ export async function POST(request: Request) {
     currentInterval: schedule.current_interval,
     memoryStrength: schedule.memory_strength || 0,
     revisionNumber: schedule.revision_count,
+    cognitiveComplexity: schedule.problems?.cognitive_complexity || 5,
+    lastRevisionDate: schedule.last_revised_at,
+    stabilityScore: schedule.recall_stability_score || 100,
   });
 
   const nextDate = result.nextRevisionDate.toISOString().split("T")[0];
@@ -40,6 +43,7 @@ export async function POST(request: Request) {
     health_status: result.newHealthStatus,
     current_interval: result.newInterval,
     confidence_level: result.newHealthStatus === "mastered" ? 5 : result.newHealthStatus === "strong" ? 4 : 3,
+    recall_stability_score: result.newStabilityScore,
   }).eq("id", schedule.id);
 
   // Update problem confidence
@@ -62,6 +66,7 @@ export async function POST(request: Request) {
     reveals_used,
     notes,
     mode,
+    cheese_penalty_applied: result.cheesePenaltyApplied,
   });
 
   // Award XP

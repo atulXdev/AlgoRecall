@@ -495,6 +495,8 @@ async function markAsRevisedToday(
     currentInterval,
     memoryStrength,
     revisionNumber: revisionCount,
+    cognitiveComplexity: 5,
+    stabilityScore: existingSchedule?.recall_stability_score || 100,
   });
 
   const nextDate = result.nextRevisionDate.toISOString().split("T")[0];
@@ -509,6 +511,7 @@ async function markAsRevisedToday(
     current_interval: result.newInterval,
     revision_count: revisionCount + 1,
     confidence_level: result.newHealthStatus === "mastered" ? 5 : 3,
+    recall_stability_score: result.newStabilityScore,
     last_revised_at: new Date().toISOString()
   };
 

@@ -60,6 +60,12 @@ export default function DashboardContent({ profile, focusQueue, backlogSize, dor
   const completedToday = todayActivity?.revision_count || 0;
   const totalDue = focusQueue.length;
   const greeting = new Date().getHours() < 12 ? "Good morning" : new Date().getHours() < 17 ? "Good afternoon" : "Good evening";
+  const isRecoveryMode = profile?.recovery_mode;
+
+  // Calculate Cognitive Load
+  const totalCognitiveLoad = focusQueue.reduce((acc, item) => acc + (item.problems?.cognitive_complexity || 5), 0);
+  const loadLabel = totalCognitiveLoad < 20 ? "Light Day" : totalCognitiveLoad < 50 ? "Medium Day" : "Deep Focus Day";
+  const loadColor = totalCognitiveLoad < 20 ? "text-emerald-400" : totalCognitiveLoad < 50 ? "text-amber-400" : "text-red-400";
 
   const handleSync = async () => {
     setSyncing(true);
@@ -101,7 +107,7 @@ export default function DashboardContent({ profile, focusQueue, backlogSize, dor
       {/* Stat Cards */}
       <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
         {[
-          { label: "Focus Queue", value: focusQueue.length, icon: Calendar, color: "text-primary" },
+          { label: "Focus Queue", value: focusQueue.length, icon: Calendar, color: "text-primary", subtitle: loadLabel, subColor: loadColor },
           { label: "Backlog", value: backlogSize, icon: BookOpen, color: backlogSize > 0 ? "text-amber-400" : "text-muted-foreground" },
           { label: "Completed Today", value: completedToday, icon: CheckCircle2, color: completedToday >= 10 ? "text-emerald-400" : "text-amber-400", isGoal: true },
           { label: "Total Problems", value: totalProblems, icon: BookOpen, color: "text-chart-3" },
@@ -113,6 +119,7 @@ export default function DashboardContent({ profile, focusQueue, backlogSize, dor
                   <div>
                     <p className="text-xs text-muted-foreground">{stat.label}</p>
                     <p className={`text-2xl font-bold ${stat.color}`}>{stat.value}{stat.isGoal ? " / 10" : ""}</p>
+                    {stat.subtitle && <p className={`text-[10px] font-medium mt-0.5 ${stat.subColor}`}>{stat.subtitle}</p>}
                   </div>
                   <stat.icon className={`h-8 w-8 ${stat.color} opacity-30`} />
                 </div>
@@ -150,7 +157,17 @@ export default function DashboardContent({ profile, focusQueue, backlogSize, dor
           )}
           
           {/* Backlog Alert (soft) */}
-          {backlogSize > 0 && (
+          {isRecoveryMode && (
+            <div className="rounded-lg bg-emerald-500/5 border border-emerald-500/20 p-4 flex items-center justify-between text-sm">
+              <div className="flex items-center gap-3">
+                <CheckCircle2 className="h-5 w-5 text-emerald-400" />
+                <span className="text-emerald-400 font-medium">Recovery Mode Active</span>
+              </div>
+              <span className="text-emerald-400/80 text-xs text-right max-w-xs">We've significantly reduced your queue today to help you ease back into your habit safely.</span>
+            </div>
+          )}
+
+          {backlogSize > 0 && !isRecoveryMode && (
             <div className="rounded-lg bg-amber-500/5 border border-amber-500/20 p-4 flex items-center justify-between text-sm">
               <div className="flex items-center gap-3">
                 <BookOpen className="h-5 w-5 text-amber-400" />

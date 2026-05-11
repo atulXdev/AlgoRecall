@@ -18,6 +18,10 @@ export interface RevisionInput {
   memoryStrength: number; // 0-100
   revisionNumber: number;
   timeTakenSeconds?: number;
+  cognitiveComplexity?: number; // 1-10
+  recallLatencyMs?: number;
+  lastRevisionDate?: string;
+  stabilityScore?: number; // 0-100
 }
 
 export interface RevisionResult {
@@ -25,6 +29,8 @@ export interface RevisionResult {
   newMemoryStrength: number;
   newHealthStatus: HealthStatus;
   nextRevisionDate: Date;
+  newStabilityScore: number;
+  cheesePenaltyApplied: boolean;
 }
 
 /**
@@ -33,7 +39,9 @@ export interface RevisionResult {
 function calculateMemoryStrength(
   currentStrength: number,
   confidence: ConfidenceRating,
-  mode: RevisionMode
+  mode: RevisionMode,
+  complexity: number,
+  cheesePenalty: boolean
 ): number {
   let delta = 0;
   
@@ -45,6 +53,16 @@ function calculateMemoryStrength(
     delta = -10;
   } else if (confidence === "forgot") {
     delta = -40;
+  }
+
+  // Cognitive complexity modifier: Harder problems yield slightly more memory strength on success
+  if (delta > 0 && complexity > 5) {
+    delta += (complexity - 5);
+  }
+
+  // Anti-cheese: if penalty applied, slash gains
+  if (cheesePenalty && delta > 0) {
+    delta = Math.floor(delta / 3);
   }
 
   return Math.max(0, Math.min(100, currentStrength + delta));
@@ -65,20 +83,37 @@ function determineHealthStatus(strength: number): HealthStatus {
  * Calculate the next revision interval based on an evolved SM-2 algorithm
  */
 export function calculateNextInterval(input: RevisionInput): RevisionResult {
-  const { mode, confidence, currentInterval, memoryStrength } = input;
+  const { mode, confidence, currentInterval, memoryStrength, cognitiveComplexity = 5, lastRevisionDate, stabilityScore = 100 } = input;
   
-  const newMemoryStrength = calculateMemoryStrength(memoryStrength, confidence, mode);
+  // Anti-Cheese Detection: Revision within 12 hours gives massive diminishing returns
+  let cheesePenaltyApplied = false;
+  if (lastRevisionDate) {
+    const hoursSinceLast = (Date.now() - new Date(lastRevisionDate).getTime()) / (1000 * 60 * 60);
+    if (hoursSinceLast < 12 && confidence === "perfect") {
+      cheesePenaltyApplied = true;
+    }
+  }
+
+  const newMemoryStrength = calculateMemoryStrength(memoryStrength, confidence, mode, cognitiveComplexity, cheesePenaltyApplied);
   const newHealthStatus = determineHealthStatus(newMemoryStrength);
+  
+  // Recall Stability: Tracks consistency. Drops heavily on forgot, slowly recovers on perfect.
+  let newStabilityScore = stabilityScore;
+  if (confidence === "forgot") newStabilityScore = Math.max(0, newStabilityScore - 30);
+  else if (confidence === "hint") newStabilityScore = Math.max(0, newStabilityScore - 10);
+  else if (confidence === "perfect") newStabilityScore = Math.min(100, newStabilityScore + 10);
   
   let currentIndex = BASE_INTERVALS.findIndex(i => i >= currentInterval);
   if (currentIndex === -1) currentIndex = BASE_INTERVALS.length - 1;
 
   let newInterval = currentInterval;
 
-  // Interval calculation logic based on confidence and mode
+  // Interval calculation logic based on confidence, mode, and complexity
+  const complexityPenalty = cognitiveComplexity >= 8 ? 1 : 0; // Hard problems advance slower
+
   if (confidence === "perfect") {
     if (mode === "full") {
-      newInterval = BASE_INTERVALS[Math.min(BASE_INTERVALS.length - 1, currentIndex + 2)];
+      newInterval = BASE_INTERVALS[Math.max(0, Math.min(BASE_INTERVALS.length - 1, currentIndex + 2 - complexityPenalty))];
     } else {
       // Quick recall - safer advancement
       newInterval = BASE_INTERVALS[Math.min(BASE_INTERVALS.length - 1, currentIndex + 1)];
@@ -94,8 +129,12 @@ export function calculateNextInterval(input: RevisionInput): RevisionResult {
     // Drop back 1 interval
     newInterval = BASE_INTERVALS[Math.max(0, currentIndex - 1)];
   } else if (confidence === "forgot") {
-    // Drop back significantly but maybe not to 0 if memory was high
-    newInterval = memoryStrength > 50 ? BASE_INTERVALS[1] : BASE_INTERVALS[0];
+    // Drop back significantly but maybe not to 0 if stability was high
+    newInterval = (newStabilityScore > 70 && memoryStrength > 50) ? BASE_INTERVALS[1] : BASE_INTERVALS[0];
+  }
+
+  if (cheesePenaltyApplied) {
+    newInterval = currentInterval; // Do not advance interval if cheesing
   }
 
   const nextRevisionDate = new Date();
@@ -106,6 +145,8 @@ export function calculateNextInterval(input: RevisionInput): RevisionResult {
     newMemoryStrength: Math.round(newMemoryStrength * 100) / 100,
     newHealthStatus,
     nextRevisionDate,
+    newStabilityScore,
+    cheesePenaltyApplied,
   };
 }
 

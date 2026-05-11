@@ -22,39 +22,79 @@ export default async function DashboardPage() {
     supabase.from("problems").select("id", { count: "exact", head: true }).eq("user_id", user.id).eq("state", "dormant").eq("is_deleted", false),
   ]);
 
-  // Sort by next_revision_date (done by DB), then by current focus topic, then by problems.created_at descending for items with the same revision date
   const currentFocus = profileRes.data?.current_focus_topic;
+  const isRecoveryMode = profileRes.data?.recovery_mode || false;
+  const isPaused = profileRes.data?.paused_until && new Date(profileRes.data.paused_until) > new Date();
 
-  const sortedRevisions = (dueRes.data || []).sort((a, b) => {
-    // 1. Topic Focus Priority
-    if (currentFocus) {
-      const aIsFocus = a.problems?.topic?.toLowerCase() === currentFocus.toLowerCase();
-      const bIsFocus = b.problems?.topic?.toLowerCase() === currentFocus.toLowerCase();
-      if (aIsFocus && !bIsFocus) return -1;
-      if (!aIsFocus && bIsFocus) return 1;
-    }
-
-    // 2. Date comparison
-    if (a.next_revision_date === b.next_revision_date) {
-      // @ts-ignore
-      return new Date(b.problems?.created_at || 0).getTime() - new Date(a.problems?.created_at || 0).getTime();
-    }
-    return 0; // DB already sorted by next_revision_date ascending
-  });
+  // If paused, return an empty focus queue
+  if (isPaused) {
+    return (
+      <DashboardContent
+        profile={profileRes.data}
+        focusQueue={[]}
+        backlogSize={(dueRes.data || []).length}
+        dormantCount={dormantRes.count || 0}
+        revisedToday={revisedRes.data || []}
+        streak={streakRes.data}
+        topicStats={topicRes.data || []}
+        todayActivity={activityRes.data}
+        heatmapData={heatmapRes.data || []}
+        totalProblems={countRes.count || 0}
+      />
+    );
+  }
 
   // Limit the focus queue based on user settings (default to 10)
-  const dailyRevisionLimit = profileRes.data?.daily_revision_limit || 10;
+  // In recovery mode, slash the queue size to reduce anxiety
+  const baseLimit = profileRes.data?.daily_revision_limit || 10;
+  const dailyRevisionLimit = isRecoveryMode ? Math.max(3, Math.floor(baseLimit * 0.4)) : baseLimit;
   
-  // Create a priority-based selection for today's queue
-  // Priority logic: 1. Due Today, 2. Overdue (Recent), 3. Overdue (Oldest)
-  const dueToday = sortedRevisions.filter((r) => r.next_revision_date === today);
-  const overdue = sortedRevisions.filter((r) => r.next_revision_date < today);
+  // QUEUE BALANCING ALGORITHM
+  // 40% current topic, 30% weak recovery (fragile/forgotten), 20% stabilization (relearning), 10% random
+  const allDue = dueRes.data || [];
   
-  // Combine and limit the queue to avoid cognitive overload
-  const combinedQueue = [...dueToday, ...overdue].slice(0, dailyRevisionLimit);
+  const topicFocusPool = allDue.filter(r => r.problems?.topic?.toLowerCase() === currentFocus?.toLowerCase());
+  const weakRecoveryPool = allDue.filter(r => r.health_status === 'forgotten' || r.health_status === 'fragile' || r.memory_strength < 40);
+  const stabilizationPool = allDue.filter(r => r.health_status === 'relearning' || (r.memory_strength >= 40 && r.memory_strength < 70));
+  
+  const focusQueue: any[] = [];
+  const addedIds = new Set<string>();
+
+  const addItems = (pool: any[], targetCount: number) => {
+    let added = 0;
+    for (const item of pool) {
+      if (added >= targetCount) break;
+      if (!addedIds.has(item.id)) {
+        focusQueue.push(item);
+        addedIds.add(item.id);
+        added++;
+      }
+    }
+  };
+
+  // Target distributions
+  const topicTarget = Math.floor(dailyRevisionLimit * 0.4);
+  const weakTarget = Math.floor(dailyRevisionLimit * 0.3);
+  const stabTarget = Math.floor(dailyRevisionLimit * 0.2);
+  const randomTarget = dailyRevisionLimit - (topicTarget + weakTarget + stabTarget);
+
+  addItems(topicFocusPool, topicTarget);
+  addItems(weakRecoveryPool, weakTarget);
+  addItems(stabilizationPool, stabTarget);
+  
+  // Random resurfacing fill (or just standard due)
+  const remainingTarget = dailyRevisionLimit - focusQueue.length;
+  if (remainingTarget > 0) {
+    // Fill the rest with whatever is earliest due
+    const randomPool = allDue.sort((a, b) => new Date(a.next_revision_date).getTime() - new Date(b.next_revision_date).getTime());
+    addItems(randomPool, remainingTarget);
+  }
+
+  // Sort final queue so due today appears first, then by priority
+  const combinedQueue = focusQueue.sort((a, b) => new Date(a.next_revision_date).getTime() - new Date(b.next_revision_date).getTime());
   
   // The rest are put into a "Backlog Pool"
-  const backlogPoolSize = Math.max(0, sortedRevisions.length - dailyRevisionLimit);
+  const backlogPoolSize = Math.max(0, allDue.length - combinedQueue.length);
   
   // Dormant count
   const dormantCount = dormantRes.count || 0;
