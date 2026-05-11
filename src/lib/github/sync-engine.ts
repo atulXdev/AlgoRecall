@@ -5,7 +5,7 @@
 // Also supports flat repos with .cpp/.java/.py files
 // ============================================================
 
-import { getInitialEaseFactor } from "@/lib/spaced-repetition/engine";
+import { getInitialEaseFactor, calculateNextInterval } from "@/lib/spaced-repetition/engine";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 const IGNORE_DIRS = [".vscode", ".git", "node_modules", ".github"];
@@ -333,25 +333,21 @@ export async function syncRepository(
           if (existing.is_deleted) {
             const { data: existingSchedule } = await supabase
               .from("revision_schedules")
-              .select("id")
+              .select("*")
               .eq("problem_id", existing.id)
               .maybeSingle();
 
-            if (!existingSchedule) {
-              const today = new Date().toISOString().split("T")[0];
-              await supabase.from("revision_schedules").insert({
-                user_id: userId,
-                problem_id: existing.id,
-                next_revision_date: today,
-                ease_factor: getInitialEaseFactor(difficulty),
-                current_interval: 0,
-                revision_count: 0,
-                confidence_level: 3,
-              });
-            }
+            await markAsRevisedToday(supabase, userId, existing.id, difficulty, existingSchedule);
             result.newProblems++; // treat restored problems as "new" in the count
           } else {
             result.updatedProblems++;
+            const { data: existingSchedule } = await supabase
+              .from("revision_schedules")
+              .select("*")
+              .eq("problem_id", existing.id)
+              .maybeSingle();
+
+            await markAsRevisedToday(supabase, userId, existing.id, difficulty, existingSchedule);
           }
         } else {
           const { data: newProblem, error: insertError } = await supabase
@@ -367,16 +363,7 @@ export async function syncRepository(
 
           // Create revision schedule
           if (newProblem) {
-            const today = new Date().toISOString().split("T")[0];
-            await supabase.from("revision_schedules").insert({
-              user_id: userId,
-              problem_id: newProblem.id,
-              next_revision_date: today,
-              ease_factor: getInitialEaseFactor(difficulty),
-              current_interval: 0,
-              revision_count: 0,
-              confidence_level: 3,
-            });
+            await markAsRevisedToday(supabase, userId, newProblem.id, difficulty);
           }
           result.newProblems++;
         }
@@ -464,3 +451,103 @@ async function updateTopicStats(supabase: SupabaseClient, userId: string) {
     }
   }
 }
+
+async function markAsRevisedToday(
+  supabase: SupabaseClient,
+  userId: string,
+  problemId: string,
+  difficulty: string,
+  existingSchedule?: any
+) {
+  let currentInterval = 0;
+  let easeFactor = getInitialEaseFactor(difficulty);
+  let revisionCount = 0;
+  let confidenceLevel = 3;
+  let scheduleId = null;
+
+  if (existingSchedule) {
+    currentInterval = existingSchedule.current_interval || 0;
+    easeFactor = parseFloat(existingSchedule.ease_factor) || easeFactor;
+    revisionCount = existingSchedule.revision_count || 0;
+    confidenceLevel = existingSchedule.confidence_level || 3;
+    scheduleId = existingSchedule.id;
+  }
+
+  const result = calculateNextInterval({
+    rating: "easy",
+    currentInterval,
+    easeFactor,
+    revisionNumber: revisionCount,
+    confidenceLevel,
+  });
+
+  const nextDate = result.nextRevisionDate.toISOString().split("T")[0];
+  const today = new Date().toISOString().split("T")[0];
+
+  const scheduleData = {
+    user_id: userId,
+    problem_id: problemId,
+    next_revision_date: nextDate,
+    ease_factor: result.newEaseFactor,
+    current_interval: result.newInterval,
+    revision_count: revisionCount + 1,
+    confidence_level: result.newConfidenceLevel,
+    last_revised_at: new Date().toISOString()
+  };
+
+  if (scheduleId) {
+    await supabase.from("revision_schedules").update(scheduleData).eq("id", scheduleId);
+  } else {
+    await supabase.from("revision_schedules").insert(scheduleData);
+  }
+
+  await supabase.from("problems").update({ confidence_level: result.newConfidenceLevel }).eq("id", problemId);
+
+  await supabase.from("revision_logs").insert({
+    user_id: userId,
+    problem_id: problemId,
+    rating: "easy",
+    time_taken_seconds: 0,
+    revision_number: revisionCount + 1,
+    interval_before: currentInterval,
+    interval_after: result.newInterval,
+    ease_before: easeFactor,
+    ease_after: result.newEaseFactor,
+    reveals_used: 0,
+    notes: "Solved on LeetCode (Synced)",
+  });
+  
+  try {
+    const { data: existingDaily } = await supabase.from("daily_activity").select("*").eq("user_id", userId).eq("activity_date", today).maybeSingle();
+    const xpAmount = 5; 
+    if (existingDaily) {
+      await supabase.from("daily_activity").update({ revision_count: existingDaily.revision_count + 1, xp_earned: existingDaily.xp_earned + xpAmount }).eq("id", existingDaily.id);
+    } else {
+      await supabase.from("daily_activity").insert({ user_id: userId, activity_date: today, revision_count: 1, xp_earned: xpAmount });
+    }
+
+    const { data: streak } = await supabase.from("streaks").select("*").eq("user_id", userId).maybeSingle();
+    if (streak) {
+      const lastDate = streak.last_revision_date;
+      const yesterday = new Date(Date.now() - 86400000).toISOString().split("T")[0];
+      let newStreak = streak.current_revision_streak;
+
+      if (lastDate === today) {
+        // Already revised today
+      } else if (lastDate === yesterday) {
+        newStreak += 1;
+      } else {
+        newStreak = 1;
+      }
+
+      await supabase.from("streaks").update({
+        current_revision_streak: newStreak,
+        longest_revision_streak: Math.max(streak.longest_revision_streak, newStreak),
+        last_revision_date: today,
+      }).eq("id", streak.id);
+    }
+  } catch (e) {
+    console.error("Failed to update daily stats during sync", e);
+  }
+}
+
