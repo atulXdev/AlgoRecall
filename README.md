@@ -1,36 +1,51 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# AlgoRecall
 
-## Getting Started
+AlgoRecall is a powerful web application designed to help developers master algorithms and data structures through automated spaced repetition. By seamlessly integrating with your LeetCode GitHub repository, AlgoRecall analyzes your solved problems, schedules optimal revision dates, and gamifies your learning journey.
 
-First, run the development server:
+## 🚀 Key Features
 
+*   **GitHub Sync Engine:** Automatically syncs your LeetCode solutions directly from your connected GitHub repository. It smartly extracts problem topics, infers difficulty, and reads both code files and `README.md` intuitions.
+*   **Smart Auto-Revision (New!):** 
+    *   When a *new problem* is synced from your repository, AlgoRecall immediately marks it as revised for today.
+    *   When an *existing problem* is updated (e.g., you optimized your solution on LeetCode and pushed the new code), AlgoRecall updates the code and also registers a new revision for today. 
+    *   This ensures your daily activity, XP, and streak are automatically updated without manual logging.
+*   **Spaced Repetition System (SM-2):** Leverages a customized version of the SuperMemo-2 (SM-2) algorithm. The app adjusts revision intervals based on the problem's difficulty and your confidence level ("Easy", "Medium", "Hard", or "Forgot").
+*   **Gamification & Progression:**
+    *   Earn **XP** for completing revisions.
+    *   Track your **Daily Streak** and maintain a consistent learning habit.
+    *   Monitor **Topic Mastery** through an interactive dashboard to see your weakest and strongest algorithm categories.
+
+## 🧠 How it Works
+
+1.  **Connect & Sync:** Link your GitHub repository where you push your LeetCode solutions (e.g., using a LeetCode Chrome Extension).
+2.  **Engine Parsing:** The Sync Engine reads the repository tree, grouping related `.cpp`, `.java`, `.py`, `.js`, etc., files into coherent problems.
+3.  **Scheduling:** Using the SM-2 algorithm, AlgoRecall sets the `next_revision_date` for each problem.
+4.  **Daily Review:** Check your AlgoRecall dashboard daily to see which problems are due for revision. Review your intuition, attempt the problem again, and rate your confidence to schedule the next optimal review date.
+
+## 🛠 Tech Stack
+
+*   **Framework:** Next.js (App Router), React, TypeScript
+*   **Styling:** Tailwind CSS
+*   **Database & Auth:** Supabase (PostgreSQL)
+*   **Spaced Repetition:** Custom SM-2 implementation
+
+## 💻 Getting Started
+
+1. Clone the repository and install dependencies:
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+2. Set up your environment variables by connecting to your Supabase instance:
+```bash
+# Add your Supabase URL and Anon Key to .env.local
+NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+```
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+3. Run the development server:
+```bash
+npm run dev
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Open [http://localhost:3000](http://localhost:3000) to view the application in your browser.
