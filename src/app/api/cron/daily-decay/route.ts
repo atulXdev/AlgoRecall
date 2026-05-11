@@ -1,18 +1,22 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-
-// Initialize with service role to bypass RLS for background jobs
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
-
 export async function POST(request: Request) {
   // Simple auth check for cron services like Vercel Cron
   const authHeader = request.headers.get("authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+  
+  if (!supabaseUrl || !supabaseServiceKey) {
+    return NextResponse.json({ error: "Missing Supabase credentials" }, { status: 500 });
+  }
+
+  // Initialize with service role to bypass RLS for background jobs
+  const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
   try {
     // 1. Identify users who need recovery mode (missed 3+ days)
