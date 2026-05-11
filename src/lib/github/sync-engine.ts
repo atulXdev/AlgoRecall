@@ -491,12 +491,14 @@ async function markAsRevisedToday(
 
   const result = calculateNextInterval({
     mode: "full",
-    confidence: "perfect", // Synced problems assume a perfect full solve
+    confidence: "perfect",
     currentInterval,
     memoryStrength,
     revisionNumber: revisionCount,
     cognitiveComplexity: 5,
     stabilityScore: existingSchedule?.recall_stability_score || 100,
+    memoryFloor: existingSchedule?.memory_floor || 0,
+    confidenceCalibration: existingSchedule?.confidence_calibration_score || 100,
   });
 
   const nextDate = result.nextRevisionDate.toISOString().split("T")[0];
@@ -512,6 +514,8 @@ async function markAsRevisedToday(
     revision_count: revisionCount + 1,
     confidence_level: result.newHealthStatus === "mastered" ? 5 : 3,
     recall_stability_score: result.newStabilityScore,
+    memory_floor: result.newMemoryFloor,
+    confidence_calibration_score: result.newConfidenceCalibration,
     last_revised_at: new Date().toISOString()
   };
 

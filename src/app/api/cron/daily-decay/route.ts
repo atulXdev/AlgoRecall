@@ -42,7 +42,7 @@ export async function POST(request: Request) {
     // Fetch all non-mastered schedules
     const { data: schedules } = await supabase
       .from("revision_schedules")
-      .select("id, memory_strength, last_revised_at, health_status")
+      .select("id, memory_strength, last_revised_at, health_status, memory_floor")
       .neq("health_status", "mastered")
       .not("last_revised_at", "is", null);
 
@@ -55,14 +55,15 @@ export async function POST(request: Request) {
 
         let decayAmount = 0;
         
-        // Topic/Pattern decay curves could be applied here by joining problem topics
-        // Simple decay: 1 point per day after 3 days of inactivity
+        // Simple decay: 1.5 points per day after 3 days of inactivity
         if (daysSinceRevision > 3) {
           decayAmount = (daysSinceRevision - 3) * 1.5;
         }
 
         if (decayAmount > 0) {
-          const newStrength = Math.max(0, schedule.memory_strength - decayAmount);
+          // Memory Floor Protection: deeply learned problems cannot decay below their floor
+          const floor = schedule.memory_floor || 0;
+          const newStrength = Math.max(floor, schedule.memory_strength - decayAmount);
           let newHealth = schedule.health_status;
           
           if (newStrength < 20) newHealth = "forgotten";

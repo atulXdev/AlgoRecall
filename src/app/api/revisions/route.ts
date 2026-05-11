@@ -15,12 +15,20 @@ export async function POST(request: Request) {
 
   if (!problem_id || !actualConfidence) return NextResponse.json({ error: "Missing fields" }, { status: 400 });
 
-  // Get current schedule
+  // Get current schedule with problem data
   const { data: schedule } = await supabase.from("revision_schedules").select("*, problems(cognitive_complexity)").eq("problem_id", problem_id).eq("user_id", user.id).single();
-
   if (!schedule) return NextResponse.json({ error: "Schedule not found" }, { status: 404 });
 
-  // Calculate next interval
+  // Fetch the last revision log to get previous confidence for calibration
+  const { data: lastLog } = await supabase.from("revision_logs")
+    .select("confidence_rating")
+    .eq("problem_id", problem_id)
+    .eq("user_id", user.id)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .single();
+
+  // Calculate next interval with full trust layer
   const result = calculateNextInterval({
     mode: mode as any,
     confidence: actualConfidence as any,
@@ -30,11 +38,16 @@ export async function POST(request: Request) {
     cognitiveComplexity: schedule.problems?.cognitive_complexity || 5,
     lastRevisionDate: schedule.last_revised_at,
     stabilityScore: schedule.recall_stability_score || 100,
+    memoryFloor: schedule.memory_floor || 0,
+    confidenceCalibration: schedule.confidence_calibration_score || 100,
+    lastConfidenceRating: lastLog?.confidence_rating || null,
+    timeTakenSeconds: time_taken_seconds,
+    hintsUsed: reveals_used?.hint || actualConfidence === "hint",
   });
 
   const nextDate = result.nextRevisionDate.toISOString().split("T")[0];
 
-  // Update revision schedule
+  // Update revision schedule with all new trust-layer fields
   await supabase.from("revision_schedules").update({
     revision_count: schedule.revision_count + 1,
     next_revision_date: nextDate,
@@ -44,12 +57,15 @@ export async function POST(request: Request) {
     current_interval: result.newInterval,
     confidence_level: result.newHealthStatus === "mastered" ? 5 : result.newHealthStatus === "strong" ? 4 : 3,
     recall_stability_score: result.newStabilityScore,
+    memory_floor: result.newMemoryFloor,
+    confidence_calibration_score: result.newConfidenceCalibration,
+    plateau_detected: false, // Reset on new revision
   }).eq("id", schedule.id);
 
   // Update problem confidence
   await supabase.from("problems").update({ confidence_level: result.newHealthStatus === "mastered" ? 5 : 3 }).eq("id", problem_id);
 
-  // Insert revision log
+  // Insert revision log with full explainability
   await supabase.from("revision_logs").insert({
     user_id: user.id,
     problem_id,
@@ -67,6 +83,8 @@ export async function POST(request: Request) {
     notes,
     mode,
     cheese_penalty_applied: result.cheesePenaltyApplied,
+    review_quality_score: result.reviewQualityScore,
+    explanation_metadata: result.explanationMetadata,
   });
 
   // Award XP
@@ -108,6 +126,12 @@ export async function POST(request: Request) {
     }).eq("id", streak.id);
   }
 
+  // Disable recovery mode if user is actively revising
+  const { data: profile } = await supabase.from("users").select("recovery_mode").eq("id", user.id).single();
+  if (profile?.recovery_mode) {
+    await supabase.from("users").update({ recovery_mode: false }).eq("id", user.id);
+  }
+
   return NextResponse.json({
     next_revision_date: nextDate,
     interval_days: result.newInterval,
@@ -115,5 +139,7 @@ export async function POST(request: Request) {
     streak_updated: true,
     new_memory_strength: result.newMemoryStrength,
     new_health_status: result.newHealthStatus,
+    review_quality: result.reviewQualityScore,
+    explanation: result.explanationMetadata,
   });
 }

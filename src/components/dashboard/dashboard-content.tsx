@@ -17,12 +17,25 @@ import {
   ArrowRight,
   PartyPopper,
   RefreshCw,
+  Info,
+  ChevronDown,
+  ChevronUp,
+  Shield,
+  Zap,
 } from "lucide-react";
 import Link from "next/link";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import HeatmapGrid from "./heatmap-grid";
+import {
+  HEALTH_DISPLAY_LABELS,
+  HEALTH_DISPLAY_COLORS,
+  LEARNING_MODES,
+  generateQueueExplanation,
+  generateCognitiveLoadExplanation,
+} from "@/lib/spaced-repetition/explainability";
+import type { HealthStatus } from "@/lib/spaced-repetition/engine";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 interface DashboardContentProps {
@@ -36,6 +49,7 @@ interface DashboardContentProps {
   todayActivity: any;
   heatmapData: any[];
   totalProblems: number;
+  learningMode?: string;
 }
 
 const difficultyColor: Record<string, string> = {
@@ -54,18 +68,22 @@ function ConfidenceDots({ level }: { level: number }) {
   );
 }
 
-export default function DashboardContent({ profile, focusQueue, backlogSize, dormantCount, revisedToday, streak, topicStats, todayActivity, heatmapData, totalProblems }: DashboardContentProps) {
+export default function DashboardContent({ profile, focusQueue, backlogSize, dormantCount, revisedToday, streak, topicStats, todayActivity, heatmapData, totalProblems, learningMode = "balanced" }: DashboardContentProps) {
   const router = useRouter();
   const [syncing, setSyncing] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const completedToday = todayActivity?.revision_count || 0;
   const totalDue = focusQueue.length;
   const greeting = new Date().getHours() < 12 ? "Good morning" : new Date().getHours() < 17 ? "Good afternoon" : "Good evening";
   const isRecoveryMode = profile?.recovery_mode;
+  const currentFocus = profile?.current_focus_topic;
+  const modeConfig = LEARNING_MODES[learningMode] || LEARNING_MODES.balanced;
 
   // Calculate Cognitive Load
   const totalCognitiveLoad = focusQueue.reduce((acc, item) => acc + (item.problems?.cognitive_complexity || 5), 0);
   const loadLabel = totalCognitiveLoad < 20 ? "Light Day" : totalCognitiveLoad < 50 ? "Medium Day" : "Deep Focus Day";
   const loadColor = totalCognitiveLoad < 20 ? "text-emerald-400" : totalCognitiveLoad < 50 ? "text-amber-400" : "text-red-400";
+  const loadExplanation = generateCognitiveLoadExplanation(totalCognitiveLoad, focusQueue.length);
 
   const handleSync = async () => {
     setSyncing(true);
@@ -99,9 +117,22 @@ export default function DashboardContent({ profile, focusQueue, backlogSize, dor
             </span>
           )}
         </h1>
-        <p className="text-muted-foreground">
-          {totalDue > 0 ? `You have ${totalDue} problem${totalDue > 1 ? "s" : ""} to revise today.` : "You're all caught up! 🎉"}
-        </p>
+        <div className="flex items-center gap-3">
+          <p className="text-muted-foreground">
+            {totalDue > 0 ? `You have ${totalDue} problem${totalDue > 1 ? "s" : ""} to revise today.` : "You're all caught up! 🎉"}
+          </p>
+          {/* Learning Mode Badge */}
+          <Badge variant="outline" className="text-[10px] px-2 py-0.5 gap-1">
+            <Zap className="h-3 w-3" />
+            {modeConfig.label}
+          </Badge>
+        </div>
+        {/* Trust Widget: Cognitive Load Explanation */}
+        {totalDue > 0 && (
+          <p className="text-xs text-muted-foreground/70 mt-1 flex items-center gap-1">
+            <Info className="h-3 w-3" /> {loadExplanation}
+          </p>
+        )}
       </motion.div>
 
       {/* Stat Cards */}
@@ -150,23 +181,24 @@ export default function DashboardContent({ profile, focusQueue, backlogSize, dor
               </CardHeader>
               <CardContent className="space-y-2">
                 {focusQueue.map((item) => (
-                  <ProblemRow key={item.id} item={item} />
+                  <ProblemRow key={item.id} item={item} currentFocusTopic={currentFocus} />
                 ))}
               </CardContent>
             </Card>
           )}
           
-          {/* Backlog Alert (soft) */}
+          {/* Recovery Mode Alert */}
           {isRecoveryMode && (
             <div className="rounded-lg bg-emerald-500/5 border border-emerald-500/20 p-4 flex items-center justify-between text-sm">
               <div className="flex items-center gap-3">
-                <CheckCircle2 className="h-5 w-5 text-emerald-400" />
+                <Shield className="h-5 w-5 text-emerald-400" />
                 <span className="text-emerald-400 font-medium">Recovery Mode Active</span>
               </div>
-              <span className="text-emerald-400/80 text-xs text-right max-w-xs">We've significantly reduced your queue today to help you ease back into your habit safely.</span>
+              <span className="text-emerald-400/80 text-xs text-right max-w-xs">We&apos;ve reduced your queue to help you ease back in safely. It will auto-deactivate once you start revising.</span>
             </div>
           )}
 
+          {/* Backlog Alert */}
           {backlogSize > 0 && !isRecoveryMode && (
             <div className="rounded-lg bg-amber-500/5 border border-amber-500/20 p-4 flex items-center justify-between text-sm">
               <div className="flex items-center gap-3">
@@ -177,7 +209,7 @@ export default function DashboardContent({ profile, focusQueue, backlogSize, dor
             </div>
           )}
 
-          {/* Dormant Alert (soft) */}
+          {/* Dormant Alert */}
           {dormantCount > 0 && (
             <div className="rounded-lg bg-secondary/50 border border-border/50 p-4 flex items-center justify-between text-sm">
               <div className="flex items-center gap-3">
@@ -237,7 +269,7 @@ export default function DashboardContent({ profile, focusQueue, backlogSize, dor
               <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-base">
                   <TrendingUp className="h-4 w-4 text-amber-400" />
-                  Weak Topics
+                  Topics Needing Attention
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
@@ -268,6 +300,56 @@ export default function DashboardContent({ profile, focusQueue, backlogSize, dor
               </div>
             </CardContent>
           </Card>
+
+          {/* Progressive Disclosure: Advanced Analytics */}
+          <button
+            onClick={() => setShowAdvanced(!showAdvanced)}
+            className="w-full flex items-center justify-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors py-2"
+          >
+            {showAdvanced ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+            {showAdvanced ? "Hide" : "Show"} Advanced Insights
+          </button>
+
+          <AnimatePresence>
+            {showAdvanced && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                exit={{ opacity: 0, height: 0 }}
+                className="space-y-4 overflow-hidden"
+              >
+                {/* Memory Health Distribution */}
+                <Card className="border-border/50">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-xs text-muted-foreground font-medium">Memory Health Distribution</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-2">
+                    {(["mastered", "strong", "relearning", "fragile", "forgotten"] as HealthStatus[]).map((status) => {
+                      const count = focusQueue.filter(item => (item.health_status || "relearning") === status).length;
+                      if (count === 0) return null;
+                      return (
+                        <div key={status} className="flex items-center justify-between text-xs">
+                          <span className={HEALTH_DISPLAY_COLORS[status]}>{HEALTH_DISPLAY_LABELS[status]}</span>
+                          <span className="text-muted-foreground">{count}</span>
+                        </div>
+                      );
+                    })}
+                  </CardContent>
+                </Card>
+
+                {/* Learning Mode Info */}
+                <Card className="border-border/50">
+                  <CardContent className="p-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Zap className="h-4 w-4 text-primary" />
+                      <p className="text-sm font-medium">{modeConfig.label} Mode</p>
+                    </div>
+                    <p className="text-xs text-muted-foreground">{modeConfig.description}</p>
+                  </CardContent>
+                </Card>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </div>
 
@@ -284,46 +366,69 @@ export default function DashboardContent({ profile, focusQueue, backlogSize, dor
   );
 }
 
-function ProblemRow({ item }: { item: any }) {
+function ProblemRow({ item, currentFocusTopic }: { item: any; currentFocusTopic?: string }) {
   const problem = item.problems;
-  const healthStatus = item.health_status || "relearning";
-  const healthColor: Record<string, string> = {
-    strong: "text-emerald-500",
-    mastered: "text-blue-500",
-    fragile: "text-amber-500",
-    forgotten: "text-red-500",
-    relearning: "text-muted-foreground",
-  };
+  const healthStatus = (item.health_status || "relearning") as HealthStatus;
+  const [showExplanation, setShowExplanation] = useState(false);
   
-  // Determine if it was from backlog implicitly, but don't show red danger text
+  // Determine if it was from backlog implicitly
   const isBacklog = new Date(item.next_revision_date).getTime() < new Date(new Date().toISOString().split("T")[0]).getTime();
 
+  // Generate queue explanation
+  const explanation = generateQueueExplanation(item, currentFocusTopic);
+
   return (
-    <Link href={`/problems/${problem.id}?mode=blind`} className="block">
-      <div className="flex items-center justify-between rounded-lg border border-border/50 bg-background/50 p-3 transition-all hover:bg-accent/50 hover:border-primary/20 group">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="min-w-0">
-            <p className="font-medium text-sm truncate group-hover:text-primary transition-colors">{problem.title}</p>
-            <div className="flex items-center gap-2 mt-1">
-              <Badge variant="outline" className="text-[10px] px-1.5 py-0">{problem.topic}</Badge>
-              {problem.difficulty && (
-                <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${difficultyColor[problem.difficulty]}`}>
-                  {problem.difficulty}
-                </Badge>
-              )}
-              {isBacklog && <span className="text-[10px] text-amber-400">Backlog</span>}
-              <span className={`text-[10px] font-medium capitalize ${healthColor[healthStatus]}`}>
-                {healthStatus}
-              </span>
+    <div className="space-y-0">
+      <Link href={`/problems/${problem.id}?mode=blind`} className="block">
+        <div className="flex items-center justify-between rounded-lg border border-border/50 bg-background/50 p-3 transition-all hover:bg-accent/50 hover:border-primary/20 group">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="min-w-0">
+              <p className="font-medium text-sm truncate group-hover:text-primary transition-colors">{problem.title}</p>
+              <div className="flex items-center gap-2 mt-1">
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0">{problem.topic}</Badge>
+                {problem.difficulty && (
+                  <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${difficultyColor[problem.difficulty]}`}>
+                    {problem.difficulty}
+                  </Badge>
+                )}
+                {isBacklog && <span className="text-[10px] text-amber-400">Backlog</span>}
+                <span className={`text-[10px] font-medium ${HEALTH_DISPLAY_COLORS[healthStatus]}`}>
+                  {HEALTH_DISPLAY_LABELS[healthStatus]}
+                </span>
+              </div>
             </div>
           </div>
+          <div className="flex items-center gap-3 flex-shrink-0">
+            <div className="text-xs text-muted-foreground">STR: {Math.round(item.memory_strength || 0)}</div>
+            <ConfidenceDots level={problem.confidence_level} />
+            {/* Trust: Why this appeared */}
+            <button
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowExplanation(!showExplanation); }}
+              className="text-muted-foreground/50 hover:text-primary transition-colors"
+              title="Why this appeared"
+            >
+              <Info className="h-3.5 w-3.5" />
+            </button>
+            <ArrowRight className="h-4 w-4 text-muted-foreground group-hover:text-primary transition-colors" />
+          </div>
         </div>
-        <div className="flex items-center gap-3 flex-shrink-0">
-          <div className="text-xs text-muted-foreground">STR: {Math.round(item.memory_strength || 0)}</div>
-          <ConfidenceDots level={problem.confidence_level} />
-          <ArrowRight className="h-4 w-4 text-muted-foreground group-hover:text-primary transition-colors" />
-        </div>
-      </div>
-    </Link>
+      </Link>
+      {/* Expandable explanation — Trust Widget */}
+      <AnimatePresence>
+        {showExplanation && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            className="overflow-hidden"
+          >
+            <div className="px-4 py-2 text-[11px] text-muted-foreground/80 bg-secondary/30 rounded-b-lg border-x border-b border-border/30 flex items-center gap-2">
+              <Info className="h-3 w-3 shrink-0" />
+              {explanation}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
   );
 }

@@ -5,12 +5,14 @@ import { useState, useEffect, useCallback } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { ArrowLeft, Clock, Eye, ExternalLink, BookOpen, CheckCircle2 } from "lucide-react";
+import { ArrowLeft, Clock, Eye, ExternalLink, BookOpen, CheckCircle2, Info } from "lucide-react";
 import { GithubIcon as Github } from "@/components/icons/github";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
+import { HEALTH_DISPLAY_LABELS, HEALTH_DISPLAY_COLORS, CONFIDENCE_DISPLAY } from "@/lib/spaced-repetition/explainability";
+import type { HealthStatus } from "@/lib/spaced-repetition/engine";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -26,6 +28,7 @@ export default function ProblemDetailContent({ problem, schedule, revisionHistor
   const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
   const [selectedMode, setSelectedMode] = useState<'quick' | 'full'>('full');
+  const [lastExplanation, setLastExplanation] = useState<string[] | null>(null);
 
   const [notes, setNotes] = useState(problem.user_notes_json?.text || "");
   const [savingNotes, setSavingNotes] = useState(false);
@@ -67,7 +70,14 @@ export default function ProblemDetailContent({ problem, schedule, revisionHistor
 
       if (res.ok) {
         const data = await res.json();
-        toast.success(`Revision recorded! Next review in ${data.interval_days} day${data.interval_days > 1 ? "s" : ""}.`);
+        // Show explanation from the trust layer
+        if (data.explanation?.reasons) {
+          setLastExplanation(data.explanation.reasons);
+        }
+        const qualityLabel = data.review_quality >= 70 ? "High quality" : data.review_quality >= 40 ? "Good" : "Quick";
+        toast.success(`Revision recorded! Next review in ${data.interval_days} day${data.interval_days > 1 ? "s" : ""}.`, {
+          description: `${qualityLabel} review · Memory: ${Math.round(data.new_memory_strength)}%`,
+        });
         router.push("/dashboard");
         router.refresh();
       } else {
@@ -120,6 +130,14 @@ export default function ProblemDetailContent({ problem, schedule, revisionHistor
               </a>
             )}
             {schedule && <span>Total Revisions: {schedule.revision_count}</span>}
+            {schedule?.health_status && (
+              <span className={`font-medium ${HEALTH_DISPLAY_COLORS[schedule.health_status as HealthStatus] || 'text-muted-foreground'}`}>
+                {HEALTH_DISPLAY_LABELS[schedule.health_status as HealthStatus] || schedule.health_status}
+              </span>
+            )}
+            {schedule?.memory_strength != null && (
+              <span className="text-muted-foreground">Memory: {Math.round(schedule.memory_strength)}%</span>
+            )}
           </div>
         </div>
 
@@ -159,6 +177,18 @@ export default function ProblemDetailContent({ problem, schedule, revisionHistor
           <Button onClick={saveNotes} disabled={savingNotes || !notesRevealed} variant="secondary" size="sm" className="w-full">
             {savingNotes ? "Saving..." : "Save Notes"}
           </Button>
+
+          {/* Explainability: Show explanation after revision */}
+          {lastExplanation && lastExplanation.length > 0 && (
+            <div className="w-full rounded-lg bg-secondary/30 border border-border/50 p-3 space-y-1">
+              <p className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                <Info className="h-3 w-3" /> Why this happened
+              </p>
+              {lastExplanation.map((reason, i) => (
+                <p key={i} className="text-[11px] text-muted-foreground/80">• {reason}</p>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 

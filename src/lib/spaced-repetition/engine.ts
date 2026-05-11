@@ -6,6 +6,14 @@ import {
   BASE_INTERVALS,
   LEVEL_THRESHOLDS,
 } from "./constants";
+import {
+  calculateMemoryFloor,
+  updateConfidenceCalibration,
+  calculateReviewQuality,
+  smoothMetric,
+  generateRevisionExplanation,
+  type ExplanationContext,
+} from "./explainability";
 
 export type ConfidenceRating = "perfect" | "partial" | "hint" | "forgot";
 export type RevisionMode = "quick" | "full";
@@ -22,6 +30,10 @@ export interface RevisionInput {
   recallLatencyMs?: number;
   lastRevisionDate?: string;
   stabilityScore?: number; // 0-100
+  memoryFloor?: number;
+  confidenceCalibration?: number;
+  lastConfidenceRating?: ConfidenceRating | null;
+  hintsUsed?: boolean;
 }
 
 export interface RevisionResult {
@@ -31,6 +43,10 @@ export interface RevisionResult {
   nextRevisionDate: Date;
   newStabilityScore: number;
   cheesePenaltyApplied: boolean;
+  newMemoryFloor: number;
+  newConfidenceCalibration: number;
+  reviewQualityScore: number;
+  explanationMetadata: { reasons: string[] };
 }
 
 /**
@@ -83,7 +99,13 @@ function determineHealthStatus(strength: number): HealthStatus {
  * Calculate the next revision interval based on an evolved SM-2 algorithm
  */
 export function calculateNextInterval(input: RevisionInput): RevisionResult {
-  const { mode, confidence, currentInterval, memoryStrength, cognitiveComplexity = 5, lastRevisionDate, stabilityScore = 100 } = input;
+  const {
+    mode, confidence, currentInterval, memoryStrength,
+    cognitiveComplexity = 5, lastRevisionDate, stabilityScore = 100,
+    memoryFloor: existingFloor = 0, confidenceCalibration = 100,
+    lastConfidenceRating = null, revisionNumber, timeTakenSeconds = 300,
+    hintsUsed = false,
+  } = input;
   
   // Anti-Cheese Detection: Revision within 12 hours gives massive diminishing returns
   let cheesePenaltyApplied = false;
@@ -94,8 +116,17 @@ export function calculateNextInterval(input: RevisionInput): RevisionResult {
     }
   }
 
-  const newMemoryStrength = calculateMemoryStrength(memoryStrength, confidence, mode, cognitiveComplexity, cheesePenaltyApplied);
-  const newHealthStatus = determineHealthStatus(newMemoryStrength);
+  let rawNewStrength = calculateMemoryStrength(memoryStrength, confidence, mode, cognitiveComplexity, cheesePenaltyApplied);
+  
+  // Memory Floor Protection: deeply practiced problems cannot decay below their floor
+  const newMemoryFloor = calculateMemoryFloor(revisionNumber, stabilityScore);
+  const effectiveFloor = Math.max(existingFloor, newMemoryFloor);
+  const newMemoryStrength = Math.max(effectiveFloor, rawNewStrength);
+  
+  // Apply metric smoothing to avoid volatile swings
+  const smoothedStrength = smoothMetric(memoryStrength, newMemoryStrength, 0.6);
+  
+  const newHealthStatus = determineHealthStatus(smoothedStrength);
   
   // Recall Stability: Tracks consistency. Drops heavily on forgot, slowly recovers on perfect.
   let newStabilityScore = stabilityScore;
@@ -103,50 +134,75 @@ export function calculateNextInterval(input: RevisionInput): RevisionResult {
   else if (confidence === "hint") newStabilityScore = Math.max(0, newStabilityScore - 10);
   else if (confidence === "perfect") newStabilityScore = Math.min(100, newStabilityScore + 10);
   
+  // Confidence Calibration: track prediction accuracy
+  const newCalibration = updateConfidenceCalibration(confidenceCalibration, lastConfidenceRating, confidence);
+  
+  // Review Quality Score
+  const reviewQualityScore = calculateReviewQuality({
+    confidence, mode, timeTakenSeconds, cognitiveComplexity, hintsUsed,
+  });
+  
   let currentIndex = BASE_INTERVALS.findIndex(i => i >= currentInterval);
   if (currentIndex === -1) currentIndex = BASE_INTERVALS.length - 1;
 
   let newInterval = currentInterval;
 
   // Interval calculation logic based on confidence, mode, and complexity
-  const complexityPenalty = cognitiveComplexity >= 8 ? 1 : 0; // Hard problems advance slower
+  const complexityPenalty = cognitiveComplexity >= 8 ? 1 : 0;
 
   if (confidence === "perfect") {
     if (mode === "full") {
       newInterval = BASE_INTERVALS[Math.max(0, Math.min(BASE_INTERVALS.length - 1, currentIndex + 2 - complexityPenalty))];
     } else {
-      // Quick recall - safer advancement
       newInterval = BASE_INTERVALS[Math.min(BASE_INTERVALS.length - 1, currentIndex + 1)];
     }
   } else if (confidence === "partial") {
     if (mode === "full") {
       newInterval = BASE_INTERVALS[Math.min(BASE_INTERVALS.length - 1, currentIndex + 1)];
     } else {
-      // Quick recall partial - stay on same interval
       newInterval = BASE_INTERVALS[currentIndex];
     }
   } else if (confidence === "hint") {
-    // Drop back 1 interval
     newInterval = BASE_INTERVALS[Math.max(0, currentIndex - 1)];
   } else if (confidence === "forgot") {
-    // Drop back significantly but maybe not to 0 if stability was high
     newInterval = (newStabilityScore > 70 && memoryStrength > 50) ? BASE_INTERVALS[1] : BASE_INTERVALS[0];
   }
 
   if (cheesePenaltyApplied) {
-    newInterval = currentInterval; // Do not advance interval if cheesing
+    newInterval = currentInterval;
   }
 
   const nextRevisionDate = new Date();
   nextRevisionDate.setDate(nextRevisionDate.getDate() + newInterval);
 
+  // Generate explanation metadata
+  const explCtx: ExplanationContext = {
+    confidence, mode,
+    memoryStrengthBefore: memoryStrength,
+    memoryStrengthAfter: smoothedStrength,
+    healthBefore: determineHealthStatus(memoryStrength),
+    healthAfter: newHealthStatus,
+    intervalBefore: currentInterval,
+    intervalAfter: newInterval,
+    stabilityScore: newStabilityScore,
+    cheesePenaltyApplied,
+    cognitiveComplexity,
+    memoryFloor: effectiveFloor,
+    revisionCount: revisionNumber,
+  };
+  const reasons = generateRevisionExplanation(explCtx);
+
   return {
     newInterval,
-    newMemoryStrength: Math.round(newMemoryStrength * 100) / 100,
+    newMemoryStrength: Math.round(smoothedStrength * 100) / 100,
     newHealthStatus,
     nextRevisionDate,
     newStabilityScore,
     cheesePenaltyApplied,
+    newMemoryFloor: effectiveFloor,
+    newConfidenceCalibration: newCalibration,
+    reviewQualityScore,
+    explanationMetadata: { reasons },
   };
 }
 
